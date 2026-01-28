@@ -154,6 +154,120 @@
 - For manual `moltbot message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 
+## Extension Development
+
+Extensions live under `extensions/*` as workspace packages. There are two main kinds: **channel extensions** (add a messaging platform) and **service extensions** (add tools, auth providers, memory backends, etc.).
+
+### Extension directory layout
+```
+extensions/{id}/
+├── package.json              # moltbot metadata + deps
+├── index.ts                  # Plugin entrypoint (exports default plugin)
+├── clawdbot.plugin.json      # Manifest (id, channels, configSchema)
+├── CHANGELOG.md
+└── src/
+    ├── channel.ts            # ChannelPlugin implementation (channels only)
+    ├── runtime.ts            # Runtime singleton (setXyzRuntime / getXyzRuntime)
+    ├── config-schema.ts      # Zod/TypeBox config schema
+    ├── accounts.ts           # Account resolution helpers
+    ├── onboarding.ts         # CLI onboarding adapter
+    ├── monitor.ts            # Inbound message monitor (polling/webhook)
+    ├── send.ts               # Outbound message delivery
+    ├── actions.ts            # Message actions
+    ├── status-issues.ts      # Status diagnostics
+    ├── probe.ts              # Health-check / bot info probe
+    └── *.test.ts             # Colocated tests
+```
+
+### Plugin registration pattern
+Every extension's `index.ts` follows this pattern:
+```typescript
+import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
+import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+
+const plugin = {
+  id: "<channel-id>",
+  name: "<Display Name>",
+  description: "<Short description>",
+  configSchema: emptyPluginConfigSchema(),
+  register(api: MoltbotPluginApi) {
+    setXyzRuntime(api.runtime);
+    api.registerChannel({ plugin: xyzPlugin, dock: xyzDock });
+    api.registerHttpHandler(handleXyzWebhook); // if webhook-based
+  },
+};
+export default plugin;
+```
+
+### package.json metadata
+Channel extensions declare metadata in the `moltbot` field:
+```json
+{
+  "name": "@moltbot/<id>",
+  "version": "<match root version>",
+  "type": "module",
+  "moltbot": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "<id>",
+      "label": "<Display Name>",
+      "selectionLabel": "<Name> (<protocol>)",
+      "docsPath": "/channels/<id>",
+      "docsLabel": "<id>",
+      "blurb": "Short description for onboarding.",
+      "aliases": ["<short>"],
+      "order": 70,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@moltbot/<id>",
+      "localPath": "extensions/<id>",
+      "defaultChoice": "npm"
+    }
+  }
+}
+```
+- Runtime deps go in `dependencies`; put `moltbot` in `devDependencies` (not `dependencies` with `workspace:*`).
+- Non-channel extensions omit the `channel` and `install` fields.
+
+### ChannelPlugin adapters
+The `ChannelPlugin` interface has many optional adapters. Minimum viable:
+- `meta` - UI metadata (id, label, docsPath, blurb)
+- `capabilities` - Feature flags (chatTypes, media, reactions, threads, blockStreaming)
+- `config` - Account listing, resolution, enable/disable, describe
+- `outbound` - sendText, sendMedia, chunker
+- `security` - DM policy resolution
+- `status` - Status issues, probing, snapshots
+- `gateway` - startAccount (monitor/webhook startup)
+
+Additional adapters (add as needed): `onboarding`, `setup`, `pairing`, `groups`, `mentions`, `messaging`, `directory`, `threading`, `actions`, `agentPrompt`, `streaming`, `heartbeat`, `auth`, `command`, `elevated`, `resolver`.
+
+### Checklist for adding a new channel extension
+1. Create `extensions/<id>/` with `package.json`, `index.ts`, `clawdbot.plugin.json`, `CHANGELOG.md`
+2. Implement `ChannelPlugin` in `src/channel.ts` with required adapters
+3. Add runtime singleton in `src/runtime.ts`
+4. Add config schema in `src/config-schema.ts`
+5. Add monitor (polling or webhook) in `src/monitor.ts`
+6. Add send logic in `src/send.ts`
+7. Write docs in `docs/channels/<id>.md` (see existing channel docs for structure)
+8. Add page to `docs/docs.json` navigation under the Channels group
+9. Add label pattern to `.github/labeler.yml`
+10. Add colocated tests (`*.test.ts`)
+11. Run `pnpm lint && pnpm build && pnpm test` before committing
+12. Add CHANGELOG entry
+
+### Checklist for adding a non-channel extension
+1. Create `extensions/<id>/` with `package.json`, `index.ts`, `clawdbot.plugin.json`, `CHANGELOG.md`
+2. Use `api.registerTool(...)`, `api.registerService(...)`, `api.registerHook(...)`, etc. in register()
+3. Add label pattern to `.github/labeler.yml`
+4. Add colocated tests
+5. Run `pnpm lint && pnpm build && pnpm test`
+
+### Agent workflow files
+See `.agent/workflows/` for step-by-step guides:
+- `add-channel-extension.md` - Full workflow for adding a new messaging channel
+- `add-extension.md` - Workflow for adding non-channel extensions (tools, services, auth)
+
 ## NPM + 1Password (publish/verify)
 - Use the 1password skill; all `op` commands must run inside a fresh tmux session.
 - Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
